@@ -4,5 +4,7 @@
 <p>
 	<ul>
 		<li> ./tftp_client "server_ip_address" "server_port_no" (-p "file_name") / (-g "file_name")</li>
+		<li> -p ==> for uploading file</li>
+		<li> -g ==> for downloading file</li>
 	</ul>
 </p>
