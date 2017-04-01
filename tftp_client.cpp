@@ -171,7 +171,6 @@ void get_file(char filename[],struct sockaddr_in server_addr,int socket){
 	int len = sizeof(anonymous);
 	char *response_handler = NULL;
 	int server_opcode;
-	bool first_time_response = true;
 	int i;
 	bool file_open = true;
 	char request_buf[MAXREQPACKET];
@@ -281,18 +280,7 @@ void get_file(char filename[],struct sockaddr_in server_addr,int socket){
 		      		if(debug)
 		      			printf(" Port = %d  The opcode = %02x --- The Block received -- %d\n",TID,server_opcode,received_packet);
 					/*
-						** First time server response handler data limit exceed
-					*/
-					if(first_time_response){
-						if(response > 516){
-							data_section = response - 4;
-						}
-						else if(response < 516){
-							data_section = 512;		// to make ensure that this will be last file chunk
-						}
-						first_time_response = !first_time_response;
-					}
-					/*
+		
 						** To make ensure that the received packet is data packet
 					*/
 					if(server_opcode != 0x03){
