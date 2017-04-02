@@ -125,7 +125,7 @@ int connect_to_server(const char *argv[],struct sockaddr_in &server_addr){
   	server_addr.sin_port = htons (port);
   	server_addr.sin_addr.s_addr = inet_addr(argv[1]);
   	int client_socket = -1;
-  	client_socket = socket (AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+  	client_socket = socket (AF_INET, SOCK_DGRAM, 0);
   	return client_socket;
 }
 bool validation(int argc){
