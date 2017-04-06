@@ -125,7 +125,7 @@ int connect_to_server(const char *argv[],struct sockaddr_in &server_addr){
   	server_addr.sin_port = htons (port);
   	server_addr.sin_addr.s_addr = inet_addr(argv[1]);
   	int client_socket = -1;
-  	client_socket = socket (AF_INET, SOCK_DGRAM, 0);
+  	client_socket = socket (AF_INET, SOCK_DGRAM, IPPROTO_UDP);
   	return client_socket;
 }
 bool validation(int argc){
@@ -279,8 +279,8 @@ void get_file(char filename[],struct sockaddr_in server_addr,int socket){
 					memcpy((char *)file_buffer,response_handler,response-4); 	// As first 4 byte has already been processed					
 		      		if(debug)
 		      			printf(" Port = %d  The opcode = %02x --- The Block received -- %d\n",TID,server_opcode,received_packet);
+					
 					/*
-		
 						** To make ensure that the received packet is data packet
 					*/
 					if(server_opcode != 0x03){
@@ -475,13 +475,14 @@ void post_file(char filename[],struct sockaddr_in server_addr,int socket){
 		fprintf(stderr, "%s\n","Can not open file for reading in client side" );
 		return;
 	}
-	int file_size = 0;
 	int data_section = 512;
+	int file_size = data_section;
 	int data_packet_length = 0;
-	while(true){
+	received_packet = 0;
+	while(file_size == data_section){
 		file_size = fread(file_buffer,1,data_section,fp);
 		sent_packet++;			// block number will start from 1
-		received_packet = 0;	// Always take the first row as data packet and leave others for backup
+		received_packet %= MAXREQPACKET;  // back up upto 256 blocks
 		sprintf(backup_buffer[received_packet],"%c%c%c%c",0x00,DATA,0x00,0x00);
 		backup_buffer[received_packet][2] = (sent_packet & 0xff00) >> 8 ;  
 		backup_buffer[received_packet][3] = sent_packet & 0x00ff;
@@ -572,8 +573,8 @@ void post_file(char filename[],struct sockaddr_in server_addr,int socket){
 			/*
 				Retransmission of all datapackets those already have been backed up 
 			*/
-			for (int k = 0; i <= received_packet; k++){
-				if(sendto(socket,backup_buffer[i],data_packet_length,0,(struct sockaddr *)&server_addr,
+			for (int k = 0; k <= MAXREQPACKET; k++){
+				if(sendto(socket,backup_buffer[k],data_packet_length,0,(struct sockaddr *)&server_addr,
 						  server_length) < 0){
 					if(debug)
 						printf("can not sent back up packet index %d\n",i);
