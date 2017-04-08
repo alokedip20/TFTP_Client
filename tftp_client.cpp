@@ -21,18 +21,26 @@ void post_file(char filename[],struct sockaddr_in server_addr,int socket);
 int ack_packet(int block,unsigned char ack_buf[]);
 int error_packet(unsigned char error_buf[],unsigned char error_code);
 void clean(unsigned char buffer[]);
+void show_menu(void);
 char current_dir[256];
 bool debug = false;
+int window_size = 1;
 /*
 	** server_address port <-g filename> <-p filename>
 */
 int main(int argc, char const *argv[])
 {
 	if(!validation(argc)){
-		fprintf(stderr, "%s\n"," Press -g followed by file_name to download file and -p followed by file_name to upload the file into the tftp server. -d optional to see debug message");
+		show_menu();
 		return ERROR;
 	}
 	if(argc == 6){
+		if(!strcmp(argv[5],"-d")){
+			debug = true;
+		}
+	}
+	if(argc == 7){
+		window_size = atoi(argv[6]);
 		if(!strcmp(argv[5],"-d")){
 			debug = true;
 		}
@@ -77,6 +85,7 @@ int main(int argc, char const *argv[])
 			break;
 		default:
 			cout<<" Error Arguments "<<endl;
+			show_menu();
 			return ERROR;
 	}
 	char request_buf[MAXREQPACKET];
@@ -130,7 +139,7 @@ int connect_to_server(const char *argv[],struct sockaddr_in &server_addr){
   	return client_socket;
 }
 bool validation(int argc){
-	return (argc == 5 || argc == 6);
+	return (argc == 5 || argc == 6 || argc == 7);
 }
 void display_server_details(struct sockaddr_in addr){
 	if(debug){
@@ -296,9 +305,10 @@ void post_file(char filename[],struct sockaddr_in server_addr,int socket){
 		fprintf(stdout, "================================\n%s\n=========================\n","You are going to Upload File");
 		fprintf(stdout, "The File => %s\n",filename );
 	}
-	int no_of_retry,server_response,sent_packet,request_length,server_length,TID,error_length,file_read;
-	unsigned char ack_buffer[MAX_FILE_BUFFER],request_buf[256],operation_buf[256],server_opcode,file_buffer[MAX_FILE_BUFFER],data_buffer[516];
-	sent_packet = 0;
+	int no_of_retry,server_response,sent_packet,request_length,server_length,TID,error_length,file_read,acked_packet,data_length;
+	unsigned char ack_buffer[MAX_FILE_BUFFER],request_buf[256],operation_buf[256],server_opcode,file_buffer[MAX_FILE_BUFFER],data_buffer[window_size][516];
+	bool last_ack = false;
+	sent_packet = acked_packet = 0;
 	req_packet(WRQ,filename,request_buf,&request_length);
 	server_length = sizeof(server_addr);
 	TID = 0;
@@ -315,7 +325,7 @@ void post_file(char filename[],struct sockaddr_in server_addr,int socket){
 		}
 		server_response = recvfrom(socket,ack_buffer,sizeof(ack_buffer),0,(struct sockaddr *)&server_addr,(socklen_t *)&server_length);
 		if(server_response < 0){
-			if(sent_packet == 0){
+			if(acked_packet == 0){
 				if(sendto(socket,request_buf,request_length,0,(struct sockaddr *)&server_addr,sizeof(server_addr)) < 0){
 					fprintf(stderr, "%s\n","Can not send write request to server" );
 				}
@@ -346,10 +356,10 @@ void post_file(char filename[],struct sockaddr_in server_addr,int socket){
 		response_handler++;
 		server_opcode = *response_handler;
 		response_handler++;
-		sent_packet = *response_handler << 8;
-		sent_packet &=0xff00;
+		acked_packet = *response_handler << 8;
+		acked_packet &=0xff00;
 		response_handler++;
-		sent_packet += *response_handler & 0x00ff;
+		acked_packet += *response_handler & 0x00ff;
 		response_handler++;
 		if(debug)
 			printf("Opcode => %02x block => %d\n",server_opcode,sent_packet );
@@ -374,16 +384,26 @@ void post_file(char filename[],struct sockaddr_in server_addr,int socket){
 	}
 	file_read = data_section;
 	clean(file_buffer);
-	clean(data_buffer);
-	while(file_read == data_section){
-		sent_packet++;
-		file_read = fread(file_buffer,1,data_section,fp);
-		sprintf((char *)data_buffer,"%c%c%c%c",0x00,DATA,0x00,0x00);
-		memcpy((char *)data_buffer+4,file_buffer,data_section);
-		data_buffer[2] = (sent_packet & 0xff00 ) >> 8;
-		data_buffer[3] = sent_packet & 0x00ff;
-		if(sendto(socket,data_buffer,data_section+4,0,(struct sockaddr *)&server_addr,sizeof(server_addr)) < 0){
-			fprintf(stderr, "%s\n","Can not send data packet" );
+	for (int i = 0; i < window_size; ++i)
+	{
+		clean(data_buffer[i]);
+	}
+	data_length = data_section + 4;
+	while(!last_ack){
+		if(acked_packet == sent_packet){
+			for (int i = 0; i < window_size && !feof(fp); ++i){
+				sent_packet++;
+				file_read = fread(file_buffer,1,data_section,fp);
+				data_length = sprintf((char *)data_buffer[i],"%c%c%c%c",0x00,DATA,0x00,0x00);
+				memcpy((char *)data_buffer[i]+4,file_buffer,data_section);
+				data_buffer[i][2] = (sent_packet & 0xff00 ) >> 8;
+				data_buffer[i][3] = sent_packet & 0x00ff;
+				if(sendto(socket,data_buffer[i],data_section+4,0,(struct sockaddr *)&server_addr,sizeof(server_addr)) < 0){
+					fprintf(stderr, "%s\n","Can not send data packet" );
+				}
+				if(debug)
+					printf("Data block => %d has sent.....Waiting for acknowledgement => %d == %d\n",sent_packet,data_length,file_read);
+			}
 		}
 		for(no_of_retry = 0;no_of_retry < MAX_RETRY;no_of_retry++){
 			if(setsockopt(socket,SOL_SOCKET,SO_RCVTIMEO,(const struct timeval *)&time_channel,sizeof(struct  timeval)) < 0){
@@ -391,8 +411,10 @@ void post_file(char filename[],struct sockaddr_in server_addr,int socket){
 			}
 			server_response = recvfrom(socket,ack_buffer,sizeof(ack_buffer),0,(struct sockaddr *)&server_addr,(socklen_t *)&server_length);
 			if(server_response < 0){
-				if(sendto(socket,data_buffer,data_section+4,0,(struct sockaddr *)&server_addr,sizeof(server_addr)) < 0){
-					fprintf(stderr, "%s\n","Can not send data packet" );
+				for (int i = acked_packet; i <= sent_packet; ++i){
+					if(sendto(socket,data_buffer[i],data_section+4,0,(struct sockaddr *)&server_addr,sizeof(server_addr)) < 0){
+						fprintf(stderr, "%s\n","Can not send data packet" );
+					}
 				}
 				continue;
 			}
@@ -412,10 +434,10 @@ void post_file(char filename[],struct sockaddr_in server_addr,int socket){
 			response_handler++;
 			server_opcode = *response_handler;
 			response_handler++;
-			sent_packet = *response_handler << 8;
-			sent_packet &=0xff00;
+			acked_packet = *response_handler << 8;
+			acked_packet &=0xff00;
 			response_handler++;
-			sent_packet += *response_handler & 0x00ff;
+			acked_packet += *response_handler & 0x00ff;
 			response_handler++;
 			if(server_opcode != ACK){
 				fprintf(stderr, "Not a ack packet => %s\n",response_handler+4 );
@@ -431,8 +453,14 @@ void post_file(char filename[],struct sockaddr_in server_addr,int socket){
 			/*
 				** correct ack packet
 			*/
+			if(feof(fp)){
+				if(acked_packet == sent_packet){
+					printf("%s\n","Successfully Uploaded data ..... :)" );
+					return;
+				}
+			}
 			if(debug){
-				printf("Data block => %d has been sent and acknowledged\n",sent_packet);
+				printf("Data block => %d has been sent and acknowledged\n",acked_packet);
 			}
 			break;
 		}
@@ -458,5 +486,15 @@ int error_packet(unsigned char error_buf[],unsigned char error_code){
 void clean(unsigned char buffer[]){
 	size_t length = strlen((char *)buffer);
 	bzero((char *)&buffer,length);
-
+}
+void show_menu(void){
+	printf("\t%s\n","=====================================================================");
+	printf("\t\t\t%s\n","Trivial File Transfer Protocol Client Interface" );
+	printf("\t%s\n","=====================================================================");
+	printf("\t%d => %s\n",1," First argument Server IP address in IP format" );
+	printf("\t%d => %s\n",2," Second argument Server Port that must be 69" );
+	printf("\t%d => %s\n",3," Third argument can be any of the two : \n \t\t-g => for downloading file\n \t\t-p => for uploading file" );
+	printf("\t%d %s\n",4," Fourth argument will be filename" );
+	printf("\t%d %s\n",5," Fifth argument is optional which is -d => for displaying debug message" );
+	printf("\t%d %s\n",6," Sixth argument (only for uploading file) will be active only if debug option has been activated and it is for varying window size . Default window size is One");
 }
